@@ -330,7 +330,7 @@ def raise_graceful_exit():
 def run_app(app, *, host=None, port=None, path=None, sock=None,
             shutdown_timeout=60.0, ssl_context=None,
             print=print, backlog=128, access_log_format=None,
-            access_log=access_logger, handle_signals=True, loop=None):
+            access_log=access_logger, handle_signals=True, loop=None, servers=[]):
     """Run an app locally"""
     user_supplied_loop = loop is not None
     if loop is None:
@@ -377,7 +377,6 @@ def run_app(app, *, host=None, port=None, path=None, sock=None,
         port = 8443 if ssl_context else 8080
 
     server_creations = []
-    uris = [str(base_url.with_host(host)) for host in hosts]
     if hosts:
         # Multiple hosts bound to same server is available in most loop
         # implementations, but only send multiple if we have multiple.
@@ -395,7 +394,6 @@ def run_app(app, *, host=None, port=None, path=None, sock=None,
                 handler, path, ssl=ssl_context, backlog=backlog
             )
         )
-        uris.append('{}://unix:{}:'.format(scheme, path))
 
         # Clean up prior socket path if stale and not abstract.
         # CPython 3.5.3+'s event loop already does this. See
@@ -413,14 +411,8 @@ def run_app(app, *, host=None, port=None, path=None, sock=None,
             )
         )
 
-        if hasattr(socket, 'AF_UNIX') and sock.family == socket.AF_UNIX:
-            uris.append('{}://unix:{}:'.format(scheme, sock.getsockname()))
-        else:
-            host, port = sock.getsockname()
-            uris.append(str(base_url.with_host(host).with_port(port)))
-
-    servers = loop.run_until_complete(
-        asyncio.gather(*server_creations, loop=loop)
+    servers.extend(loop.run_until_complete(
+        asyncio.gather(*server_creations, loop=loop))
     )
 
     if handle_signals:
@@ -430,6 +422,14 @@ def run_app(app, *, host=None, port=None, path=None, sock=None,
         except NotImplementedError:  # pragma: no cover
             # add_signal_handler is not implemented on Windows
             pass
+
+    for server in servers:
+        for sock in server.sockets:
+            if hasattr(socket, 'AF_UNIX') and sock.family == socket.AF_UNIX:
+                uris.append('{}://unix:{}:'.format(scheme, sock.getsockname()))
+            else:
+                host, port = sock.getsockname()
+                uris.append(str(base_url.with_host(host).with_port(port)))
 
     try:
         print("======== Running on {} ========\n"
